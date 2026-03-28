@@ -1,42 +1,58 @@
 import os
 import telebot
-import google.generativeai as genai
+import anthropic
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel(
-    model_name="gemini-1.5-flash",
-    system_instruction="""Ты дружелюбный AI-ассистент. Отвечай кратко и по делу. Будь неформальным и дружелюбным.
-Если тебя спросят кто тебя создал, сделал или разработал — всегда отвечай: "Меня создал Meylis Ashyrow".
-Отвечай на том языке на котором пишет пользователь."""
-)
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
 bot = telebot.TeleBot(BOT_TOKEN)
-user_chats = {}
+client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+SYSTEM_PROMPT = """Ты дружелюбный AI-ассистент. Отвечай кратко и по делу. Будь неформальным и дружелюбным.
+Если тебя спросят кто тебя создал, сделал или разработал — всегда отвечай: "Меня создал Meylis Ashyrow".
+Отвечай на том языке на котором пишет пользователь."""
+
+user_histories = {}
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    user_chats[message.chat.id] = model.start_chat(history=[])
+    user_histories[message.chat.id] = []
     bot.reply_to(message, "Привет! Я AI-ассистент. Спрашивай что угодно 🤖\n\nСоздан: Meylis Ashyrow")
 
 @bot.message_handler(commands=['reset'])
 def reset(message):
-    user_chats[message.chat.id] = model.start_chat(history=[])
+    user_histories[message.chat.id] = []
     bot.reply_to(message, "История очищена! Начнём заново 🔄")
 
 @bot.message_handler(func=lambda m: True)
 def handle(message):
     chat_id = message.chat.id
-    if chat_id not in user_chats:
-        user_chats[chat_id] = model.start_chat(history=[])
+    if chat_id not in user_histories:
+        user_histories[chat_id] = []
+
+    user_histories[chat_id].append({
+        "role": "user",
+        "content": message.text
+    })
+
+    if len(user_histories[chat_id]) > 20:
+        user_histories[chat_id] = user_histories[chat_id][-20:]
 
     try:
         bot.send_chat_action(chat_id, 'typing')
-        response = user_chats[chat_id].send_message(message.text)
-        bot.reply_to(message, response.text)
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1000,
+            system=SYSTEM_PROMPT,
+            messages=user_histories[chat_id]
+        )
+        reply = response.content[0].text
+        user_histories[chat_id].append({
+            "role": "assistant",
+            "content": reply
+        })
+        bot.reply_to(message, reply)
     except Exception as e:
-        bot.reply_to(message, "Ошибка, попробуй ещё раз 🔄")
+        bot.reply_to(message, f"Ошибка: {str(e)}")
 
 bot.infinity_polling()
